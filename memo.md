@@ -1,6 +1,5 @@
-Yijie's learning MEMO for 18-845 Internet Services  
-<br>
-About CGI(common gateway interface)  
+#Yijie's learning MEMO for 18-845 Internet Services  
+###About CGI(common gateway interface)  
 CGI is a standard method used to generate dynamic content on Web pages. CGI, when implemented on web server, provides an interface between the Web server and the program that generate the dynamic content. Just a short code snippet to see how to use it:
 ```c
 void serve_dynamic(int fd, char *filename, char *cgiargs)
@@ -27,7 +26,7 @@ The filename determines the location of our CGI program and we also set the cgia
 <br>
 <br>
 <br>
-About dealing with Broken pipe  
+###About dealing with Broken pipe  
 Reading or writing to a socket which has already been closed on the other end(like: clicking "stop" on web browser) will result into SIGPIPE signal and EPIPE errno. Either of them will terminate the process. But we don't want web server to terminate due to that. So we should do 2 things: Block SIGPIPE signal and Ignore EPIPE error. Let's see how we do it:
 ```c
 sigset_t mask;
