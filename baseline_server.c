@@ -14,6 +14,10 @@
  */
 
 #include "csapp.h"
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
@@ -23,11 +27,19 @@ void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum,
                  char *shortmsg, char *longmsg);
+void *thread(void *vargp);
+void Rio_writen_new(int fd, void *usrbuf, size_t n);
+ssize_t Rio_readnb_new(rio_t *rp, void *usrbuf, size_t n);
+ssize_t Rio_readlineb_new(rio_t *rp, void *usrbuf, size_t maxlen);
+
+#define DEBUG 1
 
 int main(int argc, char **argv)
 {
-  int listenfd, connfd, port, clientlen;
+  int listenfd, port, clientlen, *connfdp;
   struct sockaddr_in clientaddr;
+  sigset_t mask;
+  pthread_t tid;
 
   /* Check command line args */
   if (argc != 2) {
@@ -36,17 +48,39 @@ int main(int argc, char **argv)
   }
   port = atoi(argv[1]);
 
+  /* Block SIGPIPE */
+  Sigemptyset(&mask);
+  Sigaddset(&mask, SIGPIPE);
+  Sigprocmask(SIG_BLOCK, &mask, NULL);
+
   listenfd = Open_listenfd(port);
   while (1) {
+    connfdp = Malloc(sizeof(int));
     clientlen = sizeof(clientaddr);
-    connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);                                                       
-    doit(connfd);                                                                                                    
-    Close(connfd);                                                                                                    
+    *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+    Pthread_create(&tid, NULL, thread, connfdp);                                                                                                
+  }
+}
+
+void *thread(void *vargp)
+{
+  long tid = 0l;
+  if (DEBUG) {
+    tid = syscall(SYS_gettid);
+    fprintf(stdout, "DEBUG: thread#:%ld\n", tid);
+  }
+  int fd = *((int *) vargp);
+  Pthread_detach(pthread_self());
+  Free(vargp);
+  doit(fd);
+  Close(fd);
+  if (DEBUG) {
+    fprintf(stdout, "DEBUG: thread#:%ld end...\n\n", tid);
   }
 }
 
 /*                                                                                                                                             
- * doit - handle one HTTP request/response transaction                                                                                         
+ * doit - handle one HTTP request/response transaction                                                                                  
  */
 void doit(int fd)
 {
@@ -58,11 +92,12 @@ void doit(int fd)
 
   // read request line and headers
   Rio_readinitb(&rio, fd);
-  Rio_readlineb(&rio, buf, MAXLINE); // read the first line of the request
+  Rio_readlineb_new(&rio, buf, MAXLINE); // read the first line of the request
+  printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
   if (strcasecmp(method, "GET")) {                     // 501 method not implemented
     clienterror(fd, method, "501", "Not implemented",
-		"Tiny does not implement this method");
+		"Baseline Server does not implement this method");
     return;
   }
   read_requesthdrs(&rio); // print request header
@@ -71,14 +106,14 @@ void doit(int fd)
   is_static = parse_uri(uri, filename, cgiargs);
   if (stat(filename, &sbuf) < 0) {                     // 404 file not found, stat(): statistic function to calculate the size of file
     clienterror(fd, filename, "404", "Not found",
-		"Tiny couldn't find this file");
+		"Couldn't find this file");
     return;
   }
 
   if (is_static) { /* Serve static content */
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {  // 403 couldn't read the file                                        
       clienterror(fd, filename, "403", "Forbidden",
-		  "Tiny couldn't read the file");
+		  "Couldn't read the file");
       return;
     }
     serve_static(fd, filename, sbuf.st_size);                                                           
@@ -86,7 +121,7 @@ void doit(int fd)
   else { /* Serve dynamic content */
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) { // 403 could't run CGI program                                             
       clienterror(fd, filename, "403", "Forbidden",
-		  "Tiny couldn't run the CGI program");
+		  "Couldn't run the CGI program");
       return;
     }
     serve_dynamic(fd, filename, cgiargs);
@@ -104,15 +139,15 @@ void serve_static(int fd, char *filename, int filesize)
   get_filetype(filename, filetype);
   sprintf(buf, "HTTP/1.0 200 OK\r\n");
   sprintf(buf, "%sServer: Baseline Server\r\n", buf);
-  sprintf(buf, "%sContent-length: %d\r\n", filesize);
-  sprintf(buf, "%sContent-type: %s\r\n\r\n", filetype);
-  Rio_writen(fd, buf, strlen(buf)); // write header
+  sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+  sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+  Rio_writen_new(fd, buf, strlen(buf)); // write header
 
   /* Send response body to client */
   srcfd = Open(filename, O_RDONLY, 0);
   srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
   Close(srcfd);                                                                                      
-  Rio_writen(fd, srcp, filesize); // write content body                                                    
+  Rio_writen_new(fd, srcp, filesize); // write content body                                                    
   Munmap(srcp, filesize); 
 }
 
@@ -140,9 +175,9 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   char buf[MAXLINE], *emptylist[] = { NULL };
 
   sprintf(buf, "HTTP/1.0 200 OK\r\n");
-  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen_new(fd, buf, strlen(buf));
   sprintf(buf, "Server: Baseline Server\r\n");
-  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen_new(fd, buf, strlen(buf));
   
   if (Fork() == 0) { // child
     // set CGI vars
@@ -160,9 +195,9 @@ void read_requesthdrs(rio_t *rp)
 {
   char buf[MAXLINE];
   
-  Rio_readlineb(rp, buf, MAXLINE);
+  Rio_readlineb_new(rp, buf, MAXLINE);
   while (strcmp(buf, "\r\n")) {
-    Rio_readlineb(rp, buf, MAXLINE);
+    Rio_readlineb_new(rp, buf, MAXLINE);
     printf("%s", buf);
   }
   return;
@@ -198,4 +233,63 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
   }
 }
 
-void clienterror(int fd, char *cause, )
+/*
+ * Send back error message to client when specific types of error occurs
+ */
+void clienterror(int fd, char *cause, char *errnum,
+		 char *shortmsg, char *longmsg)
+{
+  char buf[MAXLINE], body[MAXBUF];
+
+  /* Build the HTTP response body */
+  sprintf(body, "<html><title>Baseline Server Error</title>");
+  sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
+  sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
+  sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
+  sprintf(body, "%s<hr><em>The Baseline Server</em>\r\n", body);
+
+  /* Print the HTTP response */
+  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+  Rio_writen_new(fd, buf, strlen(buf));
+  sprintf(buf, "Content-type: text/html\r\n");
+  Rio_writen_new(fd, buf, strlen(buf));
+  sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
+  Rio_writen_new(fd, buf, strlen(buf));
+  Rio_writen_new(fd, body, strlen(body));
+}
+
+
+/*****************************************************/
+/* New wrapper series for Rio, ignore EPIPE error    */
+/* so that broken pipe does not terminte the process */
+/*****************************************************/
+void Rio_writen_new(int fd, void *usrbuf, size_t n)
+{
+  if (rio_writen(fd, usrbuf, n) != n) {
+    /* Ignore */
+    return;
+  }
+
+}
+
+ssize_t Rio_readnb_new(rio_t *rp, void *usrbuf, size_t n)
+{
+  size_t rc;
+
+  if ((rc = rio_readnb(rp, usrbuf, n)) < 0) {
+    /* Ignore */
+    return rc;
+  }
+
+}
+
+ssize_t Rio_readlineb_new(rio_t *rp, void *usrbuf, size_t maxlen)
+{
+  size_t rc;
+
+  if ((rc = rio_readlineb(rp, usrbuf, maxlen)) < 0) {
+    /* Ignore */
+    return rc;
+  }
+
+}
