@@ -67,3 +67,51 @@ ssize_t Rio_readlineb_new(rio_t *rp, void *usrbuf, size_t maxlen)
   }
 }
 ```
+<br>
+<br>
+###About Dynamic Linking
+Many web server generate dynamic contents which takes the user input and do some corresponding operation and send back the result. An old fashion of doing this is to use CGI that Fork a new child process and Execve the program under the context of the new process. This way is proved to be time-consuming. High preformanced web server can generate dynamic content more efficiently using dynamic linking.  
+The idea is to package functions into shared library. When a request come to the server, the server links the shared library at run time and call it directly under the context of the web server process. And subsequent request can be handled at the cost of a simple request. This can help improve the throughput of the server a lot. Even new functions can be added at run time, without stopping the server which is amazing!  
+JNI also uses dynamic linking to call C functions in Java code which is worth to mention.
+```c
+/*
+ * Use dynamic linking to load the shared library at run time and call the function
+ */
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+  char buf[MAXLINE], content[MAXLINE], arg1[MAXLINE], arg2[MAXLINE];
+  void *handle;
+  void (*add)(int, int, char *); // do we know this?
+  int result, num1, num2;
+  char *error, *ptr;
+
+  handle = dlopen(filename, RTLD_LAZY); // loads and links shared library "filename"
+  if (!handle) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+
+  add = dlsym(handle, "add"); // get the address of the symbol "add", which is a function
+  if ((error = dlerror()) != NULL) {
+    fprintf(stderr, "%s\n", error);
+    exit(1);
+  }
+  
+  /*
+   * Now we can use add function as a normal function call!
+   */
+   
+  if (dlclose(handle) < 0) { // unloads the shared library
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+}
+```
+#####How to compile? Easy
+```script
+## First compile shared library
+gcc -shared -fPIC -o adder.so adder.c
+
+## Compile server program
+gcc -rdynamic -O2 -o baseline_server baseline_server.c -ldl
+```

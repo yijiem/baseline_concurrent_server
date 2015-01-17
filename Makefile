@@ -7,9 +7,9 @@
 #
 CC = gcc
 CFLAGS = -g -w -std=gnu99
-LDFLAGS = -lpthread
+LDFLAGS = -lpthread -rdynamic -ldl
 
-all: baseline_server cgi
+all: cgi baseline_server
 
 csapp.o: csapp.c csapp.h
 	$(CC) $(CFLAGS) -c csapp.c

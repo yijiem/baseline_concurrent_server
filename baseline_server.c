@@ -14,6 +14,7 @@
  */
 
 #include "csapp.h"
+#include <dlfcn.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -168,8 +169,56 @@ void get_filetype(char *filename, char *filetype)
 }
 
 /*
+ * Use dynamic linking to load the shared library at run time and call the function
+ */
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+  char buf[MAXLINE], content[MAXLINE], arg1[MAXLINE], arg2[MAXLINE];
+  void *handle;
+  void (*add)(int, int, char *); // do we know this?
+  int result, num1, num2;
+  char *error, *ptr;
+  
+  handle = dlopen(filename, RTLD_LAZY);
+  if (!handle) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+
+  add = dlsym(handle, "add");
+  if ((error = dlerror()) != NULL) {
+    fprintf(stderr, "%s\n", error);
+    exit(1);
+  }
+  
+  sprintf(buf, "HTTP/1.0 200 OK\r\n");
+  Rio_writen_new(fd, buf, strlen(buf));
+  sprintf(buf, "Server: Baseline Server\r\n");
+  Rio_writen_new(fd, buf, strlen(buf));
+  
+  if (strcmp(cgiargs, "")) {
+    ptr = strchr(cgiargs, '&');
+    *ptr = '\0';
+    strcpy(arg1, cgiargs);
+    strcpy(arg2, ptr + 1);
+    num1 = atoi(arg1);
+    num2 = atoi(arg2);
+    add(num1, num2, content);
+    Rio_writen_new(fd, content, strlen(content));
+  }
+
+  if (dlclose(handle) < 0) {
+    fprintf(stderr, "%s\n", dlerror());
+    exit(1);
+  }
+}
+
+
+
+/*
  * Run a new CGI process to serve the dynamic content to client
  */
+/*
 void serve_dynamic(int fd, char *filename, char *cgiargs)
 {
   char buf[MAXLINE], *emptylist[] = { NULL };
@@ -187,6 +236,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
   }
   Wait(NULL);
 }
+*/
 
 /*
  * read and print the request header
@@ -229,6 +279,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     }
     strcpy(filename, ".");
     strcat(filename, uri);
+    strcat(filename, ".so"); // modified to shared object file
     return 0;
   }
 }
